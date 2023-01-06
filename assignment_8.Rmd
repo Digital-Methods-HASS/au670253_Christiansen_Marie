@@ -1,0 +1,205 @@
+---
+title: "Assignment 8: Sentiment Analysis - Game of Thrones"
+author: "Marie Højlund Christiansen"
+date: "Created 2022-11-08, updated `r Sys.Date()`"
+output: 
+  html_document:
+    toc: true 
+    toc_float: true 
+---
+
+## Sentiment in Game of Thrones
+
+**Reproduce the code in the repository and extend it following the suggestion (e.g., assess and consider the sentiment in the Game of Thrones) or your own body of text.**
+
+This assignment is based on the the tutorial available in the GitHub repository: https://github.com/Digital-Methods-HASS/CDS_W12.
+
+## Transforming Text to Data
+  
+I begin by loading libraries.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+library(tidyverse)
+library(here)
+library(tidyr)
+library(magrittr)
+
+# For text mining:
+library(pdftools)
+library(tidytext)
+library(textdata) 
+library(ggwordcloud)
+
+```
+
+I load the Game of Thrones document: 
+  
+```{r get-document, include=TRUE}
+GoT_path <- here("data", "got.pdf")
+GoT_text <- pdf_text(GoT_path)
+```
+
+Now, I have to do some wrangling to transform the GoT-text into a useful dataframe. I begin by doing the following steps:
+
+- Split up pages into separate lines (separated by `\n`) using `stringr::str_split()`
+- Unnest into regular columns using `tidyr::unnest()`
+- Remove leading/trailing white space with `stringr::str_trim()`
+
+```{r split-lines, include=TRUE}
+# Wrangling data
+GoT_df <- data.frame(GoT_text) %>% 
+  mutate(text_full = str_split(GoT_text, pattern = '\\n')) %>% 
+  unnest(text_full) %>% 
+  mutate(text_full = str_trim(text_full)) #cleaning leading spaces
+
+# Checking data
+GoT_df
+```
+
+Now, each line on each page is its own row with extra starting & trailing spaces removed. Next, I transform the tokens (individual words) into a tidy format by using the `tidytext::unnest_tokens()` (which pulls from the `tokenizer` package) to split columns into tokens. In this case, I am interested in *words*, so that's the token I'll use:
+  
+```{r tokenize, include=TRUE}
+# Create tokens
+GoT_tokens <- GoT_df %>% 
+  unnest_tokens(word, text_full)
+GoT_tokens
+```
+
+Each word now constitutes its own row. Next, I count the words to identify the most common words in the text. The common words can be used to indicate stop words, which I am interested in removing from the text later:
+  
+```{r count-words, include=TRUE}
+# Counting words
+GoT_wc <- GoT_tokens %>% 
+  count(word) %>% 
+  arrange(-n) #arranging in descending order
+GoT_wc
+```
+
+Now, I remove the stop words (defined in stop word lexicons) by using `tidyr::anti_join()`:
+  
+```{r stopwords, include=TRUE}
+# Removing stop words
+GoT_stop <- GoT_tokens %>% 
+  anti_join(stop_words) %>% 
+  select(-GoT_text)
+```
+
+I check the word count again:
+  
+```{r count-words2, include=TRUE}
+# Checking that stop words have been removed
+GoT_swc <- GoT_stop %>% 
+  count(word) %>% 
+  arrange(-n)
+GoT_swc
+```
+
+Now, the stop words have been removed from the GoT-text. I wish to get rid of potential numbers (such as chapter numbers, pages numbers ect.) in the text as well: 
+  
+```{r skip-numbers, include=TRUE}
+# This code will filter out numbers by asking:
+# If you convert to as.numeric, is it NA (meaning those words)?
+# If it IS NA (is.na), then keep it (so all words are kept)
+# Anything that is converted to a number is removed
+GoT_no_numeric <- GoT_stop %>% 
+  filter(is.na(as.numeric(word)))
+```
+
+During the above steps I have transformed the GoT-text into a useful data frame and streamlined it for further sentiment analysis. Next, I am ready to make a sentiment analysis. 
+
+## Sentiment Analysis
+
+Based on my assumption of Game of Thrones, I choose to make a sentiment analysis based on the NRC lexicon (Crowdsourcing a Word-Emotion Association Lexicon, Saif Mohammad and Peter Turney, *Computational Intelligence*, 29 (3), 436-465, 2013). The NRC lexicon categorizes words in a binary fashion (“yes”/“no”) into categories of two basic sentiments; positive and negative, and eight basic emotions; anger, anticipation, disgust, fear, joy, sadness, surprise, and trust. Since the Game of Thrones is fiction, one might expect the author to use pathos as an appeal to the reader's emotions throughout the text in order to evoke feelings. Based on such an expectation, an analysis and interpretation of sentiments in the GoT-text based on more specific categories of sentiments and emotions seems rather accessible and convincing compared to an analysis based only on a spectrum of positivity and negativity as the 'bing' and 'AFINN' lexicons offer. However, it is important to take into account the essential limitations to sentiment analyzes based on existing lexicons, which I will return to later. 
+
+### Sentiment Analysis with NRC
+
+Let's now return to the sentiment analysis. I get the lexicon: 
+  
+```{r nrc, include=TRUE}
+get_sentiments(lexicon = "nrc")
+```
+
+I use the NRC lexicon to start "binning" words in the GoT-text by the feelings they're typically associated with. I use `inner_join()` to combine the GoT non-stopword text with the NRC lexicon:
+
+```{r bind-nrc, include=TRUE}
+GoT_nrc <- GoT_stop %>% 
+  inner_join(get_sentiments("nrc"))
+
+GoT_nrc
+```
+
+I check which words might be excluded from the text by using `anti_join()`:
+
+```{r check-exclusions, include=TRUE}
+# Check exclusions
+GoT_exclude <- GoT_stop %>% 
+  anti_join(get_sentiments("nrc"))
+
+# Count to find the most excluded:
+GoT_exclude_n <- GoT_exclude %>% 
+  count(word, sort = TRUE)
+head(GoT_exclude_n)
+```
+
+The words "ser", "jon", "ned", "tyrion", "eyes", and "hands" are the 6 most often removed stopwords in the GoT text. "Jon" and "Tyrion" are names in the book, which the NRC-lexicon nevertheless can't take into meaningful account in relation to sentiments because of inadequacy to account for human interpreted contexts. Thus, if the persons Jon and Tyrion is described either as good or bad throughout the book, the NRC-lexicon is not able to bin these sentiments to the two names. For this reason, the removal of these words along with other stopwords isn't problematic in this case. However, it is always important to check excluded words to interpret whether they are essential to the overall impression.       
+
+### Vizualizations of Sentiment Analysis with NRC
+
+Now, I'll make some different visualizations on the sentiments presented by the words in the GoT-text:
+  
+```{r count-nrc, include=TRUE}
+# Counting to find the amount of words in GoT text linked to the respective NRC sentiments
+GoT_nrc_n <- GoT_nrc %>% 
+  count(sentiment, sort = TRUE)
+GoT_nrc_n
+
+# Plotting
+ggplot(data = GoT_nrc_n, aes(x = sentiment, y = n, color=sentiment)) +
+  geom_col() +
+  theme_minimal()
+```
+
+The above bar plot clarifies that the overall sentimental expression in Games of Thrones, based on the words in the test, is slightly more positive than negative. Emotions as 'trust' and 'fear' seems to be expressed, which is consistent with the plot of the book about family dynasties' often violent fights over power. 
+
+The fact that the book can be expressing almost the same amount of negative and positive sentiments can be due to the fact that that some words can be associated with more categories in the NRC-lexicon. I'll take a closer look at this now, making a divided chart that shows the top five words in every sentiment category: 
+  
+```{r count-nrc-2, include=TRUE}
+# Creating data frame for plot
+GoT_nrc_n5 <- GoT_nrc %>% 
+  count(word,sentiment, sort = TRUE) %>% 
+  group_by(sentiment) %>% 
+  top_n(5) %>% 
+  ungroup()
+GoT_nrc_n5
+
+# Plotting
+GoT_nrc_gg <- ggplot(data = GoT_nrc_n5, aes(x = reorder(word,n), y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, ncol = 2, scales = "free") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Word", y = "Count")
+GoT_nrc_gg
+```
+
+The above facets make it clear that some words are linked to more different sentiments, e.g. is the word 'lord' linked to nothing less than four different sentiments: trust, positivity, negativity and disgust. 
+
+Let's check to be sure that the word appears in more categories of sentiments:
+
+```{r nrc-lord, include=TRUE}
+# Checking sentiment categories for 'lord'
+conf <- get_sentiments(lexicon = "nrc") %>% 
+  filter(word == "lord")
+conf
+```
+
+This can pose a problem in relation to the overall visual impression of the sentiments throughout the GoT text, which I'll briefly comment on in the following section.
+
+### Limitations to Sentiment Analysis
+
+As earlier mentioned, there are some limitations using the sentiment analysis method based on existing lexicons. One of the limitations is that the existing lexicons don’t take contexts into accounts. They do not account for coincidences of irony or ambiguity. According to this analysis, the word ‘lord’ can be associated with both positive and negative sentiments and with both emotions of trust and disgust. This can contribute to a “twisted” overall impression of the sentiment analysis. To overcome this problem, we’ll need to use human interpretation and look at the different contexts in which the word shows up.
+
+**Final note:** I would have liked to examine the change in sentiments throughout the Game of Thrones-book as well. I spent a lot of time trying to, but I didn’t succeed. My thought was to use the ‘bing’ lexicon to do so but unfortunately I did not manage.
